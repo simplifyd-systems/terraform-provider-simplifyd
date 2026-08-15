@@ -22,14 +22,12 @@ func NewServiceVariableResource() resource.Resource { return &serviceVariableRes
 type serviceVariableResource struct{ pd *providerData }
 
 type serviceVariableModel struct {
-	ID        types.String `tfsdk:"id"`
-	Workspace types.String `tfsdk:"workspace"`
-	Project   types.String `tfsdk:"project"`
-	Env       types.String `tfsdk:"env"`
-	Service   types.String `tfsdk:"service"`
-	Name      types.String `tfsdk:"name"`
-	Value     types.String `tfsdk:"value"`
-	Slug      types.String `tfsdk:"slug"`
+	ID      types.String `tfsdk:"id"`
+	Env     types.String `tfsdk:"env"`
+	Service types.String `tfsdk:"service"`
+	Name    types.String `tfsdk:"name"`
+	Value   types.String `tfsdk:"value"`
+	Slug    types.String `tfsdk:"slug"`
 }
 
 func (r *serviceVariableResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -48,9 +46,7 @@ func (r *serviceVariableResource) Schema(_ context.Context, _ resource.SchemaReq
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"workspace": schema.StringAttribute{MarkdownDescription: workspaceDoc, Optional: true, PlanModifiers: replace},
-			"project":   schema.StringAttribute{MarkdownDescription: projectDoc, Optional: true, PlanModifiers: replace},
-			"env":       schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replace},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replace},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the service the variable belongs to.",
 				Required:            true,
@@ -89,7 +85,7 @@ func (r *serviceVariableResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	s, diags := resolveScope(r.pd, plan.Workspace, plan.Project, plan.Env, true)
+	s, diags := resolveScope(r.pd, plan.Env, true)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -101,9 +97,6 @@ func (r *serviceVariableResource) Create(ctx context.Context, req resource.Creat
 		resp.Diagnostics.AddError("Setting service variable", err.Error())
 		return
 	}
-
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Env = types.StringValue(s.env)
 	plan.Slug = types.StringValue(v.Slug)
 	plan.ID = types.StringValue(makeID(s.workspace, s.project, s.env, svc, v.Slug))
@@ -136,8 +129,6 @@ func (r *serviceVariableResource) Read(ctx context.Context, req resource.ReadReq
 
 	for _, v := range vars {
 		if v.Slug == parts[4] {
-			state.Workspace = types.StringValue(s.workspace)
-			state.Project = types.StringValue(s.project)
 			state.Env = types.StringValue(s.env)
 			state.Service = types.StringValue(parts[3])
 			state.Name = types.StringValue(v.Name)
@@ -172,8 +163,6 @@ func (r *serviceVariableResource) Update(ctx context.Context, req resource.Updat
 
 	plan.ID = state.ID
 	plan.Slug = state.Slug
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Env = types.StringValue(s.env)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

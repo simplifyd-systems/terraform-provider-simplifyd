@@ -43,9 +43,7 @@ resource "simplifyd_service_config" "app_config" {
 
 ### Optional
 
-- `env` (String) Environment slug. Defaults to the provider's `env`.
-- `project` (String) Project slug. Defaults to the provider's `project`.
-- `workspace` (String) Workspace slug. Defaults to the provider's `workspace`.
+- `env` (String) Environment slug. Defaults to the provider's `env`, or to the environment the API token is scoped to. Workspace and project are not configurable — they come from the token.
 
 ### Read-Only
 
@@ -60,5 +58,8 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 
 ```shell
 # Configs are identified by <workspace>/<project>/<env>/<service>/<config>.
-terraform import simplifyd_service_config.app_config acme/storefront/production/api/app-config
+terraform import simplifyd_service_config.app_config 0192f3a1-6c4e-7a10-9b2d-3f8c1a5e7b04/0192f3a1-8d21-7c33-af14-6b90e2d45c77/0192f3a1-9e55-7f08-b3c6-1d47a8e90f21/api/app-config
+
+# Slugs are UUIDs; the workspace and project must be the ones the API token
+# is scoped to. Copy them from the resource's URL in the Simplifyd console.
 ```

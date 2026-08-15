@@ -24,11 +24,9 @@ func NewEnvironmentResource() resource.Resource { return &environmentResource{} 
 type environmentResource struct{ pd *providerData }
 
 type environmentModel struct {
-	ID        types.String `tfsdk:"id"`
-	Workspace types.String `tfsdk:"workspace"`
-	Project   types.String `tfsdk:"project"`
-	Name      types.String `tfsdk:"name"`
-	Slug      types.String `tfsdk:"slug"`
+	ID   types.String `tfsdk:"id"`
+	Name types.String `tfsdk:"name"`
+	Slug types.String `tfsdk:"slug"`
 }
 
 func (r *environmentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -43,16 +41,6 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 				MarkdownDescription: "`<workspace>/<project>/<env>`.",
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
-			},
-			"workspace": schema.StringAttribute{
-				MarkdownDescription: workspaceDoc,
-				Optional:            true,
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
-			},
-			"project": schema.StringAttribute{
-				MarkdownDescription: projectDoc,
-				Optional:            true,
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Human-readable environment name.",
@@ -81,9 +69,18 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	s, diags := resolveScope(r.pd, plan.Workspace, plan.Project, types.StringNull(), false)
+	s, diags := resolveScope(r.pd, types.StringNull(), false)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// An environment-scoped token is pinned to one environment and cannot make
+	// more. Say so here rather than letting the API return a bare 403.
+	if r.pd.envPinned {
+		resp.Diagnostics.AddError("Cannot create environments with this token",
+			"The API token is scoped to a single environment ("+s.env+"). Creating environments "+
+				"needs a project-scoped token.")
 		return
 	}
 
@@ -94,8 +91,6 @@ func (r *environmentResource) Create(ctx context.Context, req resource.CreateReq
 	}
 
 	plan.ID = types.StringValue(makeID(s.workspace, s.project, env.Slug))
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Name = types.StringValue(env.Name)
 	plan.Slug = types.StringValue(env.Slug)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -124,9 +119,6 @@ func (r *environmentResource) Read(ctx context.Context, req resource.ReadRequest
 		resp.Diagnostics.AddError("Reading environment", err.Error())
 		return
 	}
-
-	state.Workspace = types.StringValue(ws)
-	state.Project = types.StringValue(proj)
 	state.Name = types.StringValue(env.Name)
 	state.Slug = types.StringValue(env.Slug)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -153,8 +145,6 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 	}
 
 	plan.ID = state.ID
-	plan.Workspace = types.StringValue(parts[0])
-	plan.Project = types.StringValue(parts[1])
 	plan.Name = types.StringValue(env.Name)
 	plan.Slug = types.StringValue(env.Slug)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -180,21 +170,15 @@ func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteReq
 			return
 		}
 
-		// A project must keep at least one environment, so the API refuses this
-		// one with 409. Terraform destroys an environment before the project
-		// that contains it, so a config declaring a project and its only
-		// environment would otherwise be impossible to destroy. Treat it as
-		// removed: the project delete that follows takes the environment with
-		// it. If the project is not also being destroyed the environment really
-		// does survive, which is what the warning is for.
+		// A project must keep at least one environment, so the API refuses to
+		// delete the last one with 409. The provider cannot destroy the project
+		// itself — that is above a project token's authority — so this is a real
+		// failure rather than something to shrug off.
 		if cloud.IsConflict(err) {
-			resp.Diagnostics.AddWarning(
-				"Environment not deleted",
-				"A project must keep at least one environment, so "+slug+" was not deleted and "+
-					"has only been removed from Terraform state. If the project is being destroyed "+
-					"in this same run, the project teardown deletes it. Otherwise it still exists, "+
-					"along with any services in it.",
-			)
+			resp.Diagnostics.AddError("Deleting environment",
+				"A project must keep at least one environment, so "+slug+" cannot be deleted while "+
+					"it is the only one. Create another environment first, or delete the whole "+
+					"project from the Simplifyd console.")
 			return
 		}
 

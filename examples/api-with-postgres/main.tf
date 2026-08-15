@@ -8,10 +8,9 @@ terraform {
 }
 
 provider "simplifyd" {
-  # api_token is read from SIMPLIFYD_API_TOKEN
-  workspace = "acme"
-  project   = "storefront"
-  env       = "production"
+  # api_token is read from SIMPLIFYD_API_TOKEN. It must be a project token
+  # (sk_proj_*), which already identifies the workspace and project.
+  env = "production" # omit when the token is scoped to one environment
 }
 
 variable "image_tag" {

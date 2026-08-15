@@ -13,9 +13,9 @@ A deployment environment within a project (e.g. `production`, `staging`).
 ## Example Usage
 
 ```terraform
+# The project comes from the API token, so only the name is needed.
 resource "simplifyd_environment" "staging" {
-  project = simplifyd_project.storefront.slug
-  name    = "staging"
+  name = "staging"
 }
 ```
 
@@ -25,11 +25,6 @@ resource "simplifyd_environment" "staging" {
 ### Required
 
 - `name` (String) Human-readable environment name.
-
-### Optional
-
-- `project` (String) Project slug. Defaults to the provider's `project`.
-- `workspace` (String) Workspace slug. Defaults to the provider's `workspace`.
 
 ### Read-Only
 
@@ -44,5 +39,8 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 
 ```shell
 # Environments are identified by <workspace>/<project>/<env>.
-terraform import simplifyd_environment.staging acme/storefront/staging
+terraform import simplifyd_environment.staging 0192f3a1-6c4e-7a10-9b2d-3f8c1a5e7b04/0192f3a1-8d21-7c33-af14-6b90e2d45c77/0192f3a1-9e55-7f08-b3c6-1d47a8e90f21
+
+# Slugs are UUIDs; the workspace and project must be the ones the API token
+# is scoped to. Copy them from the resource's URL in the Simplifyd console.
 ```

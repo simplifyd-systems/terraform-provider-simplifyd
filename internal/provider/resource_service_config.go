@@ -25,8 +25,6 @@ type serviceConfigResource struct{ pd *providerData }
 
 type serviceConfigModel struct {
 	ID        types.String `tfsdk:"id"`
-	Workspace types.String `tfsdk:"workspace"`
-	Project   types.String `tfsdk:"project"`
 	Env       types.String `tfsdk:"env"`
 	Service   types.String `tfsdk:"service"`
 	Name      types.String `tfsdk:"name"`
@@ -52,9 +50,7 @@ func (r *serviceConfigResource) Schema(_ context.Context, _ resource.SchemaReque
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"workspace": schema.StringAttribute{MarkdownDescription: workspaceDoc, Optional: true, PlanModifiers: replace},
-			"project":   schema.StringAttribute{MarkdownDescription: projectDoc, Optional: true, PlanModifiers: replace},
-			"env":       schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replace},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replace},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the service to mount the file into.",
 				Required:            true,
@@ -86,7 +82,7 @@ func (r *serviceConfigResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	s, diags := resolveScope(r.pd, plan.Workspace, plan.Project, plan.Env, true)
+	s, diags := resolveScope(r.pd, plan.Env, true)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -102,9 +98,6 @@ func (r *serviceConfigResource) Create(ctx context.Context, req resource.CreateR
 		resp.Diagnostics.AddError("Creating service config", err.Error())
 		return
 	}
-
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Env = types.StringValue(s.env)
 	plan.Slug = types.StringValue(cfg.Slug)
 	plan.ID = types.StringValue(makeID(s.workspace, s.project, s.env, svc, cfg.Slug))
@@ -138,8 +131,6 @@ func (r *serviceConfigResource) Read(ctx context.Context, req resource.ReadReque
 
 	for _, cfg := range svc.Configs {
 		if cfg.Slug == parts[4] {
-			state.Workspace = types.StringValue(s.workspace)
-			state.Project = types.StringValue(s.project)
 			state.Env = types.StringValue(s.env)
 			state.Service = types.StringValue(parts[3])
 			state.Name = types.StringValue(cfg.Name)
@@ -179,8 +170,6 @@ func (r *serviceConfigResource) Update(ctx context.Context, req resource.UpdateR
 
 	plan.ID = state.ID
 	plan.Slug = state.Slug
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Env = types.StringValue(s.env)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

@@ -31,10 +31,8 @@ func NewServiceResource() resource.Resource { return &serviceResource{} }
 type serviceResource struct{ pd *providerData }
 
 type serviceModel struct {
-	ID        types.String `tfsdk:"id"`
-	Workspace types.String `tfsdk:"workspace"`
-	Project   types.String `tfsdk:"project"`
-	Env       types.String `tfsdk:"env"`
+	ID  types.String `tfsdk:"id"`
+	Env types.String `tfsdk:"env"`
 
 	Name     types.String `tfsdk:"name"`
 	Type     types.String `tfsdk:"type"`
@@ -86,9 +84,7 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"workspace": schema.StringAttribute{MarkdownDescription: workspaceDoc, Optional: true, PlanModifiers: replaceStr},
-			"project":   schema.StringAttribute{MarkdownDescription: projectDoc, Optional: true, PlanModifiers: replaceStr},
-			"env":       schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
 
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Service name.",
@@ -194,7 +190,7 @@ func (r *serviceResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	s, diags := resolveScope(r.pd, plan.Workspace, plan.Project, plan.Env, true)
+	s, diags := resolveScope(r.pd, plan.Env, true)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -480,8 +476,6 @@ func (r *serviceResource) deploy(ctx context.Context, svcs *cloud.ServicesClient
 
 func (r *serviceResource) apply(m *serviceModel, s scope, svc *cloud.Service) {
 	m.ID = types.StringValue(makeID(s.workspace, s.project, s.env, svc.Slug))
-	m.Workspace = types.StringValue(s.workspace)
-	m.Project = types.StringValue(s.project)
 	m.Env = types.StringValue(s.env)
 	m.Name = types.StringValue(svc.Name)
 	m.Type = types.StringValue(string(svc.Type))

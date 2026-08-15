@@ -63,14 +63,12 @@ resource "simplifyd_service" "worker" {
 
 - `deploy` (Boolean) Approve the resulting changeset and roll out a deployment after create/update, waiting for it to reach a terminal state. Set to `false` to stage changes without deploying (they remain in the service's pending changeset).
 - `docker` (Attributes) Configuration for `type = "docker"` services. (see [below for nested schema](#nestedatt--docker))
-- `env` (String) Environment slug. Defaults to the provider's `env`.
+- `env` (String) Environment slug. Defaults to the provider's `env`, or to the environment the API token is scoped to. Workspace and project are not configurable — they come from the token.
 - `memory` (Number) Memory allocation in MiB.
 - `postgres` (Attributes) Configuration for `type = "postgres"` services. Changes force replacement. (see [below for nested schema](#nestedatt--postgres))
-- `project` (String) Project slug. Defaults to the provider's `project`.
 - `redis` (Attributes) Configuration for `type = "redis"` services. Changes force replacement. (see [below for nested schema](#nestedatt--redis))
 - `replicas` (Number) Replica count.
 - `vcpus` (Number) vCPU allocation.
-- `workspace` (String) Workspace slug. Defaults to the provider's `workspace`.
 
 ### Read-Only
 
@@ -119,5 +117,8 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 
 ```shell
 # Services are identified by <workspace>/<project>/<env>/<service>.
-terraform import simplifyd_service.api acme/storefront/production/api
+terraform import simplifyd_service.api 0192f3a1-6c4e-7a10-9b2d-3f8c1a5e7b04/0192f3a1-8d21-7c33-af14-6b90e2d45c77/0192f3a1-9e55-7f08-b3c6-1d47a8e90f21/api
+
+# Slugs are UUIDs; the workspace and project must be the ones the API token
+# is scoped to. Copy them from the resource's URL in the Simplifyd console.
 ```

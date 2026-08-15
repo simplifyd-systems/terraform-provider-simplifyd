@@ -45,9 +45,7 @@ resource "simplifyd_ingress" "db_tcp" {
 
 - `allowed_source_ranges` (List of String) Client IP allowlist as CIDRs (bare IPs are treated as `/32`). TCP/UDP ports only. Omit or leave empty to allow all sources. Updates apply to the live load balancer without a redeploy.
 - `custom_fqdn` (String) Optional custom domain to attach. Point a CNAME at `vanity_fqdn` before applying, or certificate issuance will not complete.
-- `env` (String) Environment slug. Defaults to the provider's `env`.
-- `project` (String) Project slug. Defaults to the provider's `project`.
-- `workspace` (String) Workspace slug. Defaults to the provider's `workspace`.
+- `env` (String) Environment slug. Defaults to the provider's `env`, or to the environment the API token is scoped to. Workspace and project are not configurable — they come from the token.
 
 ### Read-Only
 
@@ -63,5 +61,8 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 
 ```shell
 # Ingress ports are identified by <workspace>/<project>/<env>/<service>/<ingress>.
-terraform import simplifyd_ingress.api_http acme/storefront/production/api/8080
+terraform import simplifyd_ingress.api_http 0192f3a1-6c4e-7a10-9b2d-3f8c1a5e7b04/0192f3a1-8d21-7c33-af14-6b90e2d45c77/0192f3a1-9e55-7f08-b3c6-1d47a8e90f21/api/8080
+
+# Slugs are UUIDs; the workspace and project must be the ones the API token
+# is scoped to. Copy them from the resource's URL in the Simplifyd console.
 ```

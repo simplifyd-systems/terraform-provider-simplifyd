@@ -18,11 +18,9 @@ func NewServiceDataSource() datasource.DataSource { return &serviceDataSource{} 
 type serviceDataSource struct{ pd *providerData }
 
 type serviceDataSourceModel struct {
-	ID        types.String `tfsdk:"id"`
-	Workspace types.String `tfsdk:"workspace"`
-	Project   types.String `tfsdk:"project"`
-	Env       types.String `tfsdk:"env"`
-	Slug      types.String `tfsdk:"slug"`
+	ID   types.String `tfsdk:"id"`
+	Env  types.String `tfsdk:"env"`
+	Slug types.String `tfsdk:"slug"`
 
 	Name            types.String `tfsdk:"name"`
 	Type            types.String `tfsdk:"type"`
@@ -43,11 +41,9 @@ func (d *serviceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest
 		MarkdownDescription: "Look up an existing service by slug — useful for wiring a service " +
 			"managed elsewhere into this configuration.",
 		Attributes: map[string]schema.Attribute{
-			"id":        schema.StringAttribute{MarkdownDescription: "`<workspace>/<project>/<env>/<service>`.", Computed: true},
-			"workspace": schema.StringAttribute{MarkdownDescription: workspaceDoc, Optional: true},
-			"project":   schema.StringAttribute{MarkdownDescription: projectDoc, Optional: true},
-			"env":       schema.StringAttribute{MarkdownDescription: envDoc, Optional: true},
-			"slug":      schema.StringAttribute{MarkdownDescription: "Slug of the service to look up.", Required: true},
+			"id":   schema.StringAttribute{MarkdownDescription: "`<workspace>/<project>/<env>/<service>`.", Computed: true},
+			"env":  schema.StringAttribute{MarkdownDescription: envDoc, Optional: true},
+			"slug": schema.StringAttribute{MarkdownDescription: "Slug of the service to look up.", Required: true},
 
 			"name":             schema.StringAttribute{Computed: true},
 			"type":             schema.StringAttribute{Computed: true},
@@ -79,7 +75,7 @@ func (d *serviceDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	s, diags := resolveScope(d.pd, cfg.Workspace, cfg.Project, cfg.Env, true)
+	s, diags := resolveScope(d.pd, cfg.Env, true)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -104,8 +100,6 @@ func (d *serviceDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	}
 
 	cfg.ID = types.StringValue(makeID(s.workspace, s.project, s.env, svc.Slug))
-	cfg.Workspace = types.StringValue(s.workspace)
-	cfg.Project = types.StringValue(s.project)
 	cfg.Env = types.StringValue(s.env)
 	cfg.Name = types.StringValue(svc.Name)
 	cfg.Type = types.StringValue(string(svc.Type))

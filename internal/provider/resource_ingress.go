@@ -27,11 +27,9 @@ func NewIngressResource() resource.Resource { return &ingressResource{} }
 type ingressResource struct{ pd *providerData }
 
 type ingressModel struct {
-	ID        types.String `tfsdk:"id"`
-	Workspace types.String `tfsdk:"workspace"`
-	Project   types.String `tfsdk:"project"`
-	Env       types.String `tfsdk:"env"`
-	Service   types.String `tfsdk:"service"`
+	ID      types.String `tfsdk:"id"`
+	Env     types.String `tfsdk:"env"`
+	Service types.String `tfsdk:"service"`
 
 	Protocol            types.String `tfsdk:"protocol"`
 	Port                types.Int64  `tfsdk:"port"`
@@ -56,9 +54,7 @@ func (r *ingressResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"workspace": schema.StringAttribute{MarkdownDescription: workspaceDoc, Optional: true, PlanModifiers: replaceStr},
-			"project":   schema.StringAttribute{MarkdownDescription: projectDoc, Optional: true, PlanModifiers: replaceStr},
-			"env":       schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the service exposing the port.",
 				Required:            true,
@@ -108,7 +104,7 @@ func (r *ingressResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	s, diags := resolveScope(r.pd, plan.Workspace, plan.Project, plan.Env, true)
+	s, diags := resolveScope(r.pd, plan.Env, true)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -131,9 +127,6 @@ func (r *ingressResource) Create(ctx context.Context, req resource.CreateRequest
 		resp.Diagnostics.AddError("Adding ingress port", err.Error())
 		return
 	}
-
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Env = types.StringValue(s.env)
 	plan.Slug = types.StringValue(port.Slug)
 	plan.VanityFQDN = types.StringValue(port.VanityFQDN)
@@ -169,8 +162,6 @@ func (r *ingressResource) Read(ctx context.Context, req resource.ReadRequest, re
 		if p.Slug != parts[4] {
 			continue
 		}
-		state.Workspace = types.StringValue(s.workspace)
-		state.Project = types.StringValue(s.project)
 		state.Env = types.StringValue(s.env)
 		state.Service = types.StringValue(parts[3])
 		state.Protocol = types.StringValue(p.Protocol)
@@ -223,8 +214,6 @@ func (r *ingressResource) Update(ctx context.Context, req resource.UpdateRequest
 	plan.ID = state.ID
 	plan.Slug = state.Slug
 	plan.VanityFQDN = state.VanityFQDN
-	plan.Workspace = types.StringValue(s.workspace)
-	plan.Project = types.StringValue(s.project)
 	plan.Env = types.StringValue(s.env)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

@@ -35,9 +35,7 @@ resource "simplifyd_service_variable" "database_url" {
 
 ### Optional
 
-- `env` (String) Environment slug. Defaults to the provider's `env`.
-- `project` (String) Project slug. Defaults to the provider's `project`.
-- `workspace` (String) Workspace slug. Defaults to the provider's `workspace`.
+- `env` (String) Environment slug. Defaults to the provider's `env`, or to the environment the API token is scoped to. Workspace and project are not configurable — they come from the token.
 
 ### Read-Only
 

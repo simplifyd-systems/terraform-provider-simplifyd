@@ -20,27 +20,28 @@ type scope struct {
 	env       string
 }
 
-// resolveScope merges per-resource scope attributes with the provider defaults.
-// Every resource in this provider accepts optional workspace/project/env
-// attributes so a single config can span more than one project.
-func resolveScope(pd *providerData, ws, proj, env types.String, needEnv bool) (scope, diag.Diagnostics) {
+// resolveScope resolves the scope a resource operates in. Workspace and project
+// always come from the token — they are not configurable — so only the
+// environment is merged from the resource attribute, then the provider default,
+// then the token's own environment scope.
+func resolveScope(pd *providerData, env types.String, needEnv bool) (scope, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	s := scope{
-		workspace: firstNonEmpty(ws.ValueString(), pd.workspace),
-		project:   firstNonEmpty(proj.ValueString(), pd.project),
+		workspace: pd.workspace,
+		project:   pd.project,
 		env:       firstNonEmpty(env.ValueString(), pd.env),
 	}
-	if s.workspace == "" {
-		diags.AddAttributeError(pathRoot("workspace"), "Missing workspace",
-			"Set `workspace` on the resource or a default on the provider block.")
-	}
-	if s.project == "" {
-		diags.AddAttributeError(pathRoot("project"), "Missing project",
-			"Set `project` on the resource or a default on the provider block.")
+	// An env-scoped token may only touch its own environment. Catching the
+	// mismatch here turns a mid-apply 403 into a plan-time error.
+	if pd.envPinned && !env.IsNull() && env.ValueString() != "" && env.ValueString() != pd.env {
+		diags.AddAttributeError(pathRoot("env"), "Environment outside token scope",
+			"The API token is scoped to environment "+pd.env+", but this resource sets env to "+
+				env.ValueString()+". Use a project-scoped token to manage more than one environment.")
 	}
 	if needEnv && s.env == "" {
 		diags.AddAttributeError(pathRoot("env"), "Missing environment",
-			"Set `env` on the resource or a default on the provider block.")
+			"Set `env` on the resource, a default on the provider block, or use an "+
+				"environment-scoped token.")
 	}
 	return s, diags
 }
@@ -50,13 +51,11 @@ func (s scope) services(c *cloud.Client) *cloud.ServicesClient {
 	return c.Workspace(s.workspace).Project(s.project).Env(s.env).Services()
 }
 
-// scopeAttrs are the shared optional scope attributes mixed into each resource
-// schema. Defined once so the attribute names and docs never drift apart.
-const (
-	workspaceDoc = "Workspace slug. Defaults to the provider's `workspace`."
-	projectDoc   = "Project slug. Defaults to the provider's `project`."
-	envDoc       = "Environment slug. Defaults to the provider's `env`."
-)
+// envDoc is the shared documentation for the one scope attribute resources
+// still expose. Defined once so it cannot drift between resources.
+const envDoc = "Environment slug. Defaults to the provider's `env`, or to the " +
+	"environment the API token is scoped to. Workspace and project are not " +
+	"configurable — they come from the token."
 
 // ── composite IDs ─────────────────────────────────────────────────────────────
 //

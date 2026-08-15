@@ -1,4 +1,4 @@
+# The project comes from the API token, so only the name is needed.
 resource "simplifyd_environment" "staging" {
-  project = simplifyd_project.storefront.slug
-  name    = "staging"
+  name = "staging"
 }
