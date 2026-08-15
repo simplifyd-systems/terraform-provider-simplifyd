@@ -22,10 +22,18 @@ builds:
     binary: "{{ .ProjectName }}_v{{ .Version }}"
 
 archives:
-  - format: zip
+  # zip is required by the Registry, not a preference.
+  - formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
+  # The manifest is repeated here and under `release` on purpose: this block
+  # hashes it into SHA256SUMS, the one below uploads it. The Registry rejects a
+  # release whose manifest is not listed in the checksums file, so dropping
+  # either entry breaks ingestion.
+  extra_files:
+    - glob: "terraform-registry-manifest.json"
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
   algorithm: sha256
 
