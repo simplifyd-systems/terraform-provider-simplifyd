@@ -1,0 +1,22 @@
+# NOTE: this workflow assumes the provider is its own repository and that the
+# `replace` directive for cloud-go-sdk has been dropped in favour of a released
+# SDK version. While the replace points at ../sdk/cloud-go-sdk, CI must either
+# check out the monorepo or vendor the SDK.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v

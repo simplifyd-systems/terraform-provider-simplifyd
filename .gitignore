@@ -1,0 +1,6 @@
+terraform-provider-simplifyd
+dist/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
