@@ -9,6 +9,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	cloud "github.com/simplifyd-systems/cloud-go-sdk"
 )
 
 var (
@@ -158,12 +160,49 @@ func (r *environmentResource) Update(ctx context.Context, req resource.UpdateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *environmentResource) Delete(_ context.Context, _ resource.DeleteRequest, resp *resource.DeleteResponse) {
-	resp.Diagnostics.AddWarning(
-		"Environment not deleted",
-		"The Simplifyd API does not support deleting environments. The environment has been "+
-			"removed from Terraform state but still exists, along with any services in it.",
-	)
+func (r *environmentResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state environmentModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	parts, err := parseID(state.ID.ValueString(), 3)
+	if err != nil {
+		resp.Diagnostics.AddError("Malformed environment ID", err.Error())
+		return
+	}
+	ws, proj, slug := parts[0], parts[1], parts[2]
+
+	// Destroys every service in the environment, synchronously.
+	if err := r.pd.client.Workspace(ws).Project(proj).Env(slug).Delete(ctx); err != nil {
+		if gone(err) {
+			return
+		}
+
+		// A project must keep at least one environment, so the API refuses this
+		// one with 409. Terraform destroys an environment before the project
+		// that contains it, so a config declaring a project and its only
+		// environment would otherwise be impossible to destroy. Treat it as
+		// removed: the project delete that follows takes the environment with
+		// it. If the project is not also being destroyed the environment really
+		// does survive, which is what the warning is for.
+		if cloud.IsConflict(err) {
+			resp.Diagnostics.AddWarning(
+				"Environment not deleted",
+				"A project must keep at least one environment, so "+slug+" was not deleted and "+
+					"has only been removed from Terraform state. If the project is being destroyed "+
+					"in this same run, the project teardown deletes it. Otherwise it still exists, "+
+					"along with any services in it.",
+			)
+			return
+		}
+
+		resp.Diagnostics.AddError("Deleting environment",
+			"The environment was not deleted and still exists, along with any services in it. "+
+				"It remains in Terraform state.\n\n"+err.Error())
+		return
+	}
 }
 
 func (r *environmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

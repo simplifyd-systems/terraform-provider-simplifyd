@@ -50,6 +50,20 @@ and block until the deployment reaches a terminal state — a failed rollout
 fails the apply rather than silently leaving a broken service. Set
 `deploy = false` to stage changes into the changeset without rolling out.
 
+**Destroy is real, and owner-only.** `simplifyd_project` and
+`simplifyd_environment` call the API's delete endpoints, which tear down every
+service underneath them synchronously. Both require the workspace `owner` role,
+so a project token (`sk_proj_*`) cannot destroy either — CI that plans and
+applies with a project token must not be the thing that runs `destroy`.
+
+**A project keeps its last environment.** The API refuses to delete a project's
+only environment with a 409. Terraform destroys an environment before the
+project containing it, so a config declaring both would otherwise be impossible
+to destroy; `simplifyd_environment`'s `Delete` treats that one refusal as
+success with a warning, on the basis that the project teardown immediately
+after removes the environment anyway. If only the environment is being
+destroyed, the warning is the signal that it is still there.
+
 **Action-based updates.** The API's service PATCH mutates one concern per
 request (`name`, `vcpus`, `image`, …), so a single Terraform update can fan out
 into several calls. See `applyUpdates` in `internal/provider/resource_service.go`.
@@ -60,8 +74,6 @@ These are API limitations, not provider bugs. Each needs a `cloudapi` change:
 
 | Gap | Effect |
 |---|---|
-| No project delete endpoint | `terraform destroy` warns and forgets the project; it keeps existing and billing |
-| No environment delete endpoint | Same, for environments |
 | Config/ingress/variable have no per-object `GET` | `Read` fetches the parent service and filters — works, but is chattier than it needs to be |
 | No workspace-scoped machine tokens | Tokens are project-scoped (`sk_proj_*`); CI for a multi-project config needs one token per project |
 
@@ -78,10 +90,6 @@ make test             # unit tests (no API access needed)
 make testacc          # acceptance tests — point at STAGING, they create real resources
 make docs             # regenerate docs/ with tfplugindocs
 ```
-
-The `go.mod` carries a `replace` pointing at `../sdk/cloud-go-sdk`. Remove it
-once the SDK cuts a release containing everything the provider uses — the
-Terraform Registry will not build a module with a filesystem `replace`.
 
 To run against a local build, add to `~/.terraformrc`:
 

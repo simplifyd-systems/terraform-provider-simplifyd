@@ -150,15 +150,32 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *projectResource) Delete(_ context.Context, _ resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// The Simplifyd API exposes no project deletion endpoint, so destroy can
-	// only forget the resource. Warn loudly rather than silently leaking it.
-	resp.Diagnostics.AddWarning(
-		"Project not deleted",
-		"The Simplifyd API does not support deleting projects. The project has been removed "+
-			"from Terraform state but still exists and may still incur cost. Delete it from the "+
-			"dashboard if that was not intended.",
-	)
+func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state projectModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	parts, err := parseID(state.ID.ValueString(), 2)
+	if err != nil {
+		resp.Diagnostics.AddError("Malformed project ID", err.Error())
+		return
+	}
+	ws, slug := parts[0], parts[1]
+
+	// Destroys every service in every environment of the project. The API runs
+	// the teardown synchronously and does not return until it is done.
+	if err := r.pd.client.Workspace(ws).Project(slug).Delete(ctx); err != nil {
+		// Already gone is the outcome destroy wanted, so it is not an error.
+		if gone(err) {
+			return
+		}
+		resp.Diagnostics.AddError("Deleting project",
+			"The project was not deleted and still exists, along with any services in it. "+
+				"It remains in Terraform state.\n\n"+err.Error())
+		return
+	}
 }
 
 func (r *projectResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
