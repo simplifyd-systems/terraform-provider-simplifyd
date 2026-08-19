@@ -11,6 +11,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -40,9 +42,11 @@ type serviceModel struct {
 	Memory   types.Int64  `tfsdk:"memory"`
 	Replicas types.Int64  `tfsdk:"replicas"`
 
-	Docker   *dockerModel   `tfsdk:"docker"`
-	Postgres *postgresModel `tfsdk:"postgres"`
-	Redis    *redisModel    `tfsdk:"redis"`
+	Docker       *dockerModel       `tfsdk:"docker"`
+	Postgres     *postgresModel     `tfsdk:"postgres"`
+	Redis        *redisModel        `tfsdk:"redis"`
+	Kafka        *kafkaModel        `tfsdk:"kafka"`
+	IPsecGateway *ipsecGatewayModel `tfsdk:"ipsec_gateway"`
 
 	Deploy types.Bool `tfsdk:"deploy"`
 
@@ -59,14 +63,29 @@ type dockerModel struct {
 }
 
 type postgresModel struct {
-	StorageGB types.Int64  `tfsdk:"storage_gb"`
-	Mode      types.String `tfsdk:"mode"`
+	StorageGB  types.Int64  `tfsdk:"storage_gb"`
+	Mode       types.String `tfsdk:"mode"`
+	Parameters types.Map    `tfsdk:"parameters"`
 }
 
 type redisModel struct {
 	StorageGB types.Int64  `tfsdk:"storage_gb"`
 	Mode      types.String `tfsdk:"mode"`
 	Replicas  types.Int64  `tfsdk:"replicas"`
+}
+
+type kafkaModel struct {
+	StorageGB   types.Int64  `tfsdk:"storage_gb"`
+	Mode        types.String `tfsdk:"mode"`
+	Brokers     types.Int64  `tfsdk:"brokers"`
+	Controllers types.Int64  `tfsdk:"controllers"`
+	Version     types.String `tfsdk:"version"`
+}
+
+type ipsecGatewayModel struct {
+	LocalSubnets types.List   `tfsdk:"local_subnets"`
+	PublicIP     types.String `tfsdk:"public_ip"`
+	VNI          types.Int64  `tfsdk:"vni"`
 }
 
 func (r *serviceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -91,12 +110,13 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Required:            true,
 			},
 			"type": schema.StringAttribute{
-				MarkdownDescription: "Service type: `docker`, `postgres`, `redis`, `s3_bucket`, " +
-					"`http_gateway`, or `zerodata_proxy`. Changing this forces replacement.",
+				MarkdownDescription: "Service type: `docker`, `postgres`, `redis`, `kafka`, `s3_bucket`, " +
+					"`http_gateway`, `ipsec_gateway`, or `zerodata_proxy`. Changing this forces replacement.",
 				Required:      true,
 				PlanModifiers: replaceStr,
 				Validators: []validator.String{
-					stringvalidator.OneOf("docker", "postgres", "redis", "s3_bucket", "http_gateway", "zerodata_proxy"),
+					stringvalidator.OneOf("docker", "postgres", "redis", "kafka", "s3_bucket",
+						"http_gateway", "ipsec_gateway", "zerodata_proxy"),
 				},
 			},
 			"vcpus": schema.Int64Attribute{
@@ -158,6 +178,16 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Computed:            true,
 				Validators:          []validator.String{stringvalidator.OneOf("standalone", "replication")},
 			},
+			"parameters": schema.MapAttribute{
+				MarkdownDescription: "Customer-tunable PostgreSQL server settings, e.g. `work_mem = \"16MB\"`. " +
+					"Only the platform's allowlist is accepted; `shared_buffers` and `effective_cache_size` " +
+					"are derived from the service's memory limit and cannot be set here. " +
+					"The map is applied as a whole: removing an entry restores its platform default, and " +
+					"a setting that needs a restart is applied by the next deployment, not immediately. " +
+					"Unlike the rest of this block, changes apply in place rather than forcing replacement.",
+				ElementType: types.StringType,
+				Optional:    true,
+			},
 		},
 	}
 	resp.Schema.Attributes["redis"] = schema.SingleNestedAttribute{
@@ -172,6 +202,72 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Validators:          []validator.String{stringvalidator.OneOf("standalone", "replication", "cluster")},
 			},
 			"replicas": schema.Int64Attribute{MarkdownDescription: "Redis replica count.", Optional: true, Computed: true},
+		},
+	}
+	// Kafka has no update actions in the API at all: pool sizes, storage and
+	// version are only read after creation, and a version change needs a
+	// multi-step rolling procedure the platform does not perform implicitly.
+	// Everything here therefore forces replacement rather than silently
+	// diverging from the running cluster.
+	resp.Schema.Attributes["kafka"] = schema.SingleNestedAttribute{
+		MarkdownDescription: "Configuration for `type = \"kafka\"` services. Changes force replacement.",
+		Optional:            true,
+		PlanModifiers:       []planmodifier.Object{objectplanmodifier.RequiresReplace()},
+		Attributes: map[string]schema.Attribute{
+			"storage_gb": schema.Int64Attribute{
+				MarkdownDescription: "Volume size in GB, per broker. Controllers get a fixed 10 GB each.",
+				Optional:            true, Computed: true,
+			},
+			"mode": schema.StringAttribute{
+				MarkdownDescription: "`standalone` (one node carrying both roles, for development) or " +
+					"`cluster` (separate broker and controller pools).",
+				Optional:   true,
+				Computed:   true,
+				Validators: []validator.String{stringvalidator.OneOf("standalone", "cluster")},
+			},
+			"brokers": schema.Int64Attribute{
+				MarkdownDescription: "Broker count. Cluster mode only; standalone pins it to 1. " +
+					"Internal topic replication is clamped to this, so a one-broker cluster is not replicated.",
+				Optional: true, Computed: true,
+			},
+			"controllers": schema.Int64Attribute{
+				MarkdownDescription: "Controller count. Cluster mode only; standalone pins it to 1. " +
+					"Keep it odd so the KRaft quorum can tolerate a failure. Controllers are billed " +
+					"as nodes and carry 10 GB of storage each.",
+				Optional: true, Computed: true,
+			},
+			"version": schema.StringAttribute{
+				MarkdownDescription: "Kafka version. Defaults to the platform's current version.",
+				Optional:            true, Computed: true,
+			},
+		},
+	}
+	resp.Schema.Attributes["ipsec_gateway"] = schema.SingleNestedAttribute{
+		MarkdownDescription: "Configuration for `type = \"ipsec_gateway\"` services — a site-to-site " +
+			"VPN gateway. Tunnels are separate `simplifyd_ipsec_connection` resources. " +
+			"A gateway is billed per tunnel-minute rather than on compute, so `vcpus`, `memory` " +
+			"and `replicas` do not apply to it.",
+		Optional: true,
+		Attributes: map[string]schema.Attribute{
+			"local_subnets": schema.ListAttribute{
+				MarkdownDescription: "Ranges this environment presents to counterparties. " +
+					"Omit to seed it with the gateway's own address. The API has no update action " +
+					"for this, so changing it forces replacement — and replacement means a new " +
+					"public address, which counterparties have pinned in their firewalls.",
+				ElementType:   types.StringType,
+				Optional:      true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.List{listplanmodifier.RequiresReplace()},
+			},
+			"public_ip": schema.StringAttribute{
+				MarkdownDescription: "Fixed public address the gateway terminates IKEv2 on. " +
+					"This is the peer address counterparties configure.",
+				Computed: true,
+			},
+			"vni": schema.Int64Attribute{
+				MarkdownDescription: "Platform-allocated overlay identifier, fixed for the gateway's life.",
+				Computed:            true,
+			},
 		},
 	}
 }
@@ -226,6 +322,25 @@ func (r *serviceResource) Create(ctx context.Context, req resource.CreateRequest
 			in.Redis.Mode = plan.Redis.Mode.ValueString()
 			in.Redis.Replicas = int(plan.Redis.Replicas.ValueInt64())
 		}
+	case cloud.ServiceTypeKafka:
+		in.Kafka = &cloud.KafkaInput{}
+		if plan.Kafka != nil {
+			in.Kafka.StorageGB = uint64(plan.Kafka.StorageGB.ValueInt64())
+			in.Kafka.Mode = plan.Kafka.Mode.ValueString()
+			in.Kafka.Brokers = int(plan.Kafka.Brokers.ValueInt64())
+			in.Kafka.Controllers = int(plan.Kafka.Controllers.ValueInt64())
+			in.Kafka.Version = plan.Kafka.Version.ValueString()
+		}
+	case cloud.ServiceTypeIPsecGateway:
+		in.IPsecGateway = &cloud.IPsecGatewayInput{}
+		if plan.IPsecGateway != nil {
+			subnets, d := toStrings(ctx, plan.IPsecGateway.LocalSubnets)
+			resp.Diagnostics.Append(d...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			in.IPsecGateway.LocalSubnets = subnets
+		}
 	}
 
 	svc, err := svcs.Create(ctx, in)
@@ -252,7 +367,7 @@ func (r *serviceResource) Create(ctx context.Context, req resource.CreateRequest
 		resp.Diagnostics.AddError("Reading back service", err.Error())
 		return
 	}
-	r.apply(&plan, s, final)
+	resp.Diagnostics.Append(r.apply(ctx, &plan, s, final)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -280,7 +395,7 @@ func (r *serviceResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	r.apply(&state, s, svc)
+	resp.Diagnostics.Append(r.apply(ctx, &state, s, svc)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -318,7 +433,7 @@ func (r *serviceResource) Update(ctx context.Context, req resource.UpdateRequest
 		resp.Diagnostics.AddError("Reading back service", err.Error())
 		return
 	}
-	r.apply(&plan, s, svc)
+	resp.Diagnostics.Append(r.apply(ctx, &plan, s, svc)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -446,6 +561,37 @@ func (r *serviceResource) applyUpdates(
 		}
 	}
 
+	// Postgres parameters are not part of the action-based PATCH: they have
+	// their own endpoint that replaces the whole map, so an emptied map is a
+	// reset to platform defaults rather than a no-op.
+	if plan.Postgres != nil && !plan.Postgres.Parameters.IsUnknown() {
+		var priorParams types.Map
+		if prior != nil && prior.Postgres != nil {
+			priorParams = prior.Postgres.Parameters
+		}
+		if prior == nil || !priorParams.Equal(plan.Postgres.Parameters) {
+			params, d := toStringMap(ctx, plan.Postgres.Parameters)
+			diags.Append(d...)
+			if diags.HasError() {
+				return diags
+			}
+			// Nothing to do on create when the map was never set; on update a
+			// null map is a deliberate reset and does need the call.
+			if prior != nil || len(params) > 0 {
+				if params == nil {
+					params = map[string]string{}
+				}
+				tflog.Debug(ctx, "replacing postgres parameters", map[string]any{"slug": slug, "count": len(params)})
+				if _, err := svcs.UpdatePostgresParameters(ctx, slug, cloud.UpdatePostgresParametersInput{
+					Parameters: params,
+				}); err != nil {
+					diags.AddError("Updating Postgres parameters", err.Error())
+					return diags
+				}
+			}
+		}
+	}
+
 	return diags
 }
 
@@ -474,7 +620,8 @@ func (r *serviceResource) deploy(ctx context.Context, svcs *cloud.ServicesClient
 	return diags
 }
 
-func (r *serviceResource) apply(m *serviceModel, s scope, svc *cloud.Service) {
+func (r *serviceResource) apply(ctx context.Context, m *serviceModel, s scope, svc *cloud.Service) diag.Diagnostics {
+	var diags diag.Diagnostics
 	m.ID = types.StringValue(makeID(s.workspace, s.project, s.env, svc.Slug))
 	m.Env = types.StringValue(s.env)
 	m.Name = types.StringValue(svc.Name)
@@ -500,6 +647,46 @@ func (r *serviceResource) apply(m *serviceModel, s scope, svc *cloud.Service) {
 		m.Redis.Mode = types.StringValue(svc.Redis.Mode)
 		m.Redis.Replicas = types.Int64Value(int64(svc.Redis.Replicas))
 	}
+	if svc.Postgres != nil && m.Postgres != nil {
+		// Preserve null vs empty: a config that never set parameters must not
+		// pick up {} as drift the moment the platform reports an empty map.
+		if len(svc.Postgres.Parameters) > 0 || !m.Postgres.Parameters.IsNull() {
+			params, d := types.MapValueFrom(ctx, types.StringType, svc.Postgres.Parameters)
+			diags.Append(d...)
+			if !diags.HasError() {
+				m.Postgres.Parameters = params
+			}
+		}
+	}
+	if svc.Kafka != nil && m.Kafka != nil {
+		m.Kafka.StorageGB = types.Int64Value(int64(svc.Kafka.StorageGB))
+		m.Kafka.Mode = types.StringValue(svc.Kafka.Mode)
+		m.Kafka.Brokers = types.Int64Value(int64(svc.Kafka.Brokers))
+		m.Kafka.Controllers = types.Int64Value(int64(svc.Kafka.Controllers))
+		m.Kafka.Version = types.StringValue(svc.Kafka.Version)
+	}
+	if svc.IPsecGateway != nil {
+		if m.IPsecGateway == nil {
+			m.IPsecGateway = &ipsecGatewayModel{LocalSubnets: types.ListNull(types.StringType)}
+		}
+		m.IPsecGateway.PublicIP = types.StringValue(svc.IPsecGateway.PublicIP)
+		m.IPsecGateway.VNI = types.Int64Value(int64(svc.IPsecGateway.VNI))
+		subnets, d := types.ListValueFrom(ctx, types.StringType, svc.IPsecGateway.LocalSubnets)
+		diags.Append(d...)
+		if !diags.HasError() {
+			m.IPsecGateway.LocalSubnets = subnets
+		}
+	}
+	return diags
+}
+
+func toStringMap(ctx context.Context, m types.Map) (map[string]string, diag.Diagnostics) {
+	if m.IsNull() || m.IsUnknown() {
+		return nil, nil
+	}
+	out := map[string]string{}
+	diags := m.ElementsAs(ctx, &out, false)
+	return out, diags
 }
 
 func toStrings(ctx context.Context, l types.List) ([]string, diag.Diagnostics) {

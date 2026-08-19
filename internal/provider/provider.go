@@ -174,6 +174,8 @@ func (p *simplifydProvider) Resources(_ context.Context) []func() resource.Resou
 		NewServiceVariableResource,
 		NewServiceConfigResource,
 		NewIngressResource,
+		NewGatewayRouteResource,
+		NewIPsecConnectionResource,
 		// No project resource: creating a project is a workspace-level action,
 		// and a project token has no authority above its own project.
 		// TODO: NewPrivateAccessGrantResource, NewCloudAccountResource.

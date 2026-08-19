@@ -8,7 +8,7 @@ require (
 	github.com/hashicorp/terraform-plugin-framework-validators v0.15.0
 	github.com/hashicorp/terraform-plugin-go v0.25.0
 	github.com/hashicorp/terraform-plugin-log v0.9.0
-	github.com/simplifyd-systems/cloud-go-sdk v0.1.16
+	github.com/simplifyd-systems/cloud-go-sdk v0.1.19
 )
 
 require (

@@ -54,6 +54,22 @@ token at them. For the same reason the API refuses to delete a project's only
 environment with a 409, and the provider surfaces that as an error: there is
 nothing it can do about it.
 
+**Kafka is create-only.** The API exposes no update action for a Kafka
+service's pools, storage or version — storage is immutable and a version change
+needs a multi-step rolling procedure the platform will not perform implicitly —
+so every field of the `kafka` block forces replacement rather than silently
+diverging from the running cluster.
+
+**Write-only secrets.** `simplifyd_ipsec_connection.psk` is never returned by
+the API, so it is tracked from state alone and a changed value is applied as a
+key rotation. The same applies to `simplifyd_service_variable.value`. Source
+both from a secret store, not from literals.
+
+**Gateway routes and tunnels need a deploy.** `simplifyd_gateway_route` and
+`simplifyd_ipsec_connection` write configuration that the running pod picks up
+on its next deployment, so a change to either is live only once the gateway
+service is redeployed.
+
 **Action-based updates.** The API's service PATCH mutates one concern per
 request (`name`, `vcpus`, `image`, …), so a single Terraform update can fan out
 into several calls. See `applyUpdates` in `internal/provider/resource_service.go`.
