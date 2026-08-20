@@ -114,7 +114,13 @@ func (p *simplifydProvider) Configure(ctx context.Context, req provider.Configur
 		return
 	}
 
-	client := cloud.NewClient(cloud.WithToken(token))
+	// The provider names itself: the SDK's default User-Agent identifies the
+	// CLI, and Terraform traffic showing up as a command line would misread
+	// both in the API's session records and in any log an operator inspects.
+	client := cloud.NewClient(
+		cloud.WithToken(token),
+		cloud.WithUserAgent("terraform-provider-simplifyd/"+p.version),
+	)
 
 	// The token knows its own workspace and project; ask once at configure time
 	// so nothing downstream has to make the operator restate them. This doubles
