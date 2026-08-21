@@ -59,11 +59,14 @@ resource "simplifyd_service" "reporting_db" {
   postgres = {
     storage_gb = 50
 
+    # Only the platform's allowlist is accepted — see the provider error for
+    # the full set. shared_buffers and effective_cache_size are derived from
+    # the service's memory and are deliberately not settable.
     parameters = {
-      work_mem                  = "16MB"
-      max_connections           = "200"
-      random_page_cost          = "1.1"
-      default_statistics_target = "200"
+      work_mem                        = "16MB"
+      maintenance_work_mem            = "256MB"
+      statement_timeout               = "30s"
+      max_parallel_workers_per_gather = "4"
     }
   }
 }
@@ -104,7 +107,7 @@ resource "simplifyd_service" "vpn" {
 
 ### Optional
 
-- `deploy` (Boolean) Approve the resulting changeset and roll out a deployment after create/update, waiting for it to reach a terminal state. Set to `false` to stage changes without deploying (they remain in the service's pending changeset).
+- `deploy` (Boolean) Approve the resulting changeset and roll out a deployment after create/update, waiting for it to reach a terminal state. Set to `false` to stage changes without deploying (they remain in the service's pending changeset). Note that a staged service reports its pre-deploy `vcpus`/`memory`, so those show as a diff on every plan until a deploy applies the changeset.
 - `docker` (Attributes) Configuration for `type = "docker"` services. (see [below for nested schema](#nestedatt--docker))
 - `env` (String) Environment slug. Defaults to the provider's `env`, or to the environment the API token is scoped to. Workspace and project are not configurable — they come from the token.
 - `ipsec_gateway` (Attributes) Configuration for `type = "ipsec_gateway"` services — a site-to-site VPN gateway. Tunnels are separate `simplifyd_ipsec_connection` resources. A gateway is billed per tunnel-minute rather than on compute, so `vcpus`, `memory` and `replicas` do not apply to it. (see [below for nested schema](#nestedatt--ipsec_gateway))
@@ -166,7 +169,7 @@ Optional:
 
 Optional:
 
-- `mode` (String) `standalone` or `replication`.
+- `mode` (String) `standalone` or `replication`. Accepted on creation only — the API does not report it back, so it is not Computed and an omitted mode stays unset rather than showing the platform's choice.
 - `parameters` (Map of String) Customer-tunable PostgreSQL server settings, e.g. `work_mem = "16MB"`. Only the platform's allowlist is accepted; `shared_buffers` and `effective_cache_size` are derived from the service's memory limit and cannot be set here. The map is applied as a whole: removing an entry restores its platform default, and a setting that needs a restart is applied by the next deployment, not immediately. Unlike the rest of this block, changes apply in place rather than forcing replacement.
 - `storage_gb` (Number) Volume size in GB.
 

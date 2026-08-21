@@ -64,7 +64,9 @@ func (r *ipsecConnectionResource) Schema(_ context.Context, _ resource.SchemaReq
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, Computed: true, PlanModifiers: []planmodifier.String{
+				stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown(),
+			}},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the `ipsec_gateway` service terminating this tunnel.",
 				Required:            true,

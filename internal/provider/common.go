@@ -1,11 +1,14 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	cloud "github.com/simplifyd-systems/cloud-go-sdk"
@@ -81,3 +84,68 @@ func parseID(id string, n int) ([]string, error) {
 // gone reports whether err means the remote object no longer exists, in which
 // case the caller should drop it from state rather than fail the plan.
 func gone(err error) bool { return cloud.IsNotFound(err) }
+
+// ── plan modifiers ────────────────────────────────────────────────────────────
+
+// fillNullChildrenFromState carries state values into a nested block's
+// Optional+Computed children when the configuration leaves them null.
+//
+// Terraform takes a nested object from configuration whole, so a child the
+// practitioner never wrote plans as null rather than as "unknown, keep what the
+// platform chose" — and on a block that forces replacement, that null is the
+// difference between a no-op and destroying a running cluster. Terraform's own
+// UseStateForUnknown does not cover this: a child omitted inside a written
+// object is null, not unknown.
+//
+// Values the configuration does set are left exactly as written, so this only
+// ever fills in what the platform, not the practitioner, decided.
+type fillNullChildrenFromState struct{}
+
+func (fillNullChildrenFromState) Description(_ context.Context) string {
+	return "keeps platform-assigned values for nested attributes the configuration leaves unset"
+}
+
+func (m fillNullChildrenFromState) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (fillNullChildrenFromState) PlanModifyObject(
+	ctx context.Context,
+	req planmodifier.ObjectRequest,
+	resp *planmodifier.ObjectResponse,
+) {
+	// Nothing to carry over on create or destroy.
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() ||
+		req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+
+	state := req.StateValue.Attributes()
+	planned := make(map[string]attr.Value, len(req.PlanValue.Attributes()))
+	changed := false
+
+	for name, value := range req.PlanValue.Attributes() {
+		prior, ok := state[name]
+		// A child left out of the configuration arrives here either null or,
+		// when it is Optional+Computed, already marked unknown. Both mean "the
+		// practitioner did not choose this"; the configuration check is what
+		// keeps a genuinely computed value (one referencing another resource)
+		// out of this branch.
+		if (value.IsNull() || value.IsUnknown()) && ok && !prior.IsNull() &&
+			req.ConfigValue.Attributes()[name].IsNull() {
+			planned[name] = prior
+			changed = true
+			continue
+		}
+		planned[name] = value
+	}
+	if !changed {
+		return
+	}
+
+	obj, diags := types.ObjectValue(req.PlanValue.AttributeTypes(ctx), planned)
+	resp.Diagnostics.Append(diags...)
+	if !resp.Diagnostics.HasError() {
+		resp.PlanValue = obj
+	}
+}

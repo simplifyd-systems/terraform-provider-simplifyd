@@ -46,7 +46,9 @@ func (r *serviceVariableResource) Schema(_ context.Context, _ resource.SchemaReq
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replace},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, Computed: true, PlanModifiers: []planmodifier.String{
+				stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown(),
+			}},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the service the variable belongs to.",
 				Required:            true,

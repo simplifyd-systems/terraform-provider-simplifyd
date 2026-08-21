@@ -44,11 +44,14 @@ resource "simplifyd_service" "reporting_db" {
   postgres = {
     storage_gb = 50
 
+    # Only the platform's allowlist is accepted — see the provider error for
+    # the full set. shared_buffers and effective_cache_size are derived from
+    # the service's memory and are deliberately not settable.
     parameters = {
-      work_mem                  = "16MB"
-      max_connections           = "200"
-      random_page_cost          = "1.1"
-      default_statistics_target = "200"
+      work_mem                        = "16MB"
+      maintenance_work_mem            = "256MB"
+      statement_timeout               = "30s"
+      max_parallel_workers_per_gather = "4"
     }
   }
 }

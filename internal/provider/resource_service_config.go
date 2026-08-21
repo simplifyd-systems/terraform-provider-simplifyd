@@ -50,7 +50,9 @@ func (r *serviceConfigResource) Schema(_ context.Context, _ resource.SchemaReque
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replace},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, Computed: true, PlanModifiers: []planmodifier.String{
+				stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown(),
+			}},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the service to mount the file into.",
 				Required:            true,

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -103,7 +104,9 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, Computed: true, PlanModifiers: []planmodifier.String{
+				stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown(),
+			}},
 
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Service name.",
@@ -137,7 +140,9 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"deploy": schema.BoolAttribute{
 				MarkdownDescription: "Approve the resulting changeset and roll out a deployment after " +
 					"create/update, waiting for it to reach a terminal state. Set to `false` to stage " +
-					"changes without deploying (they remain in the service's pending changeset).",
+					"changes without deploying (they remain in the service's pending changeset). " +
+					"Note that a staged service reports its pre-deploy `vcpus`/`memory`, so those " +
+					"show as a diff on every plan until a deploy applies the changeset.",
 				Optional: true,
 				Computed: true,
 				Default:  booldefault.StaticBool(true),
@@ -154,6 +159,7 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema.Attributes["docker"] = schema.SingleNestedAttribute{
 		MarkdownDescription: "Configuration for `type = \"docker\"` services.",
 		Optional:            true,
+		PlanModifiers:       []planmodifier.Object{fillNullChildrenFromState{}},
 		Attributes: map[string]schema.Attribute{
 			"image": schema.StringAttribute{MarkdownDescription: "Image repository.", Required: true},
 			"tag":   schema.StringAttribute{MarkdownDescription: "Image tag. Defaults to `latest`.", Optional: true, Computed: true},
@@ -170,13 +176,15 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema.Attributes["postgres"] = schema.SingleNestedAttribute{
 		MarkdownDescription: "Configuration for `type = \"postgres\"` services. Changes force replacement.",
 		Optional:            true,
+		PlanModifiers:       []planmodifier.Object{fillNullChildrenFromState{}},
 		Attributes: map[string]schema.Attribute{
 			"storage_gb": schema.Int64Attribute{MarkdownDescription: "Volume size in GB.", Optional: true, Computed: true},
 			"mode": schema.StringAttribute{
-				MarkdownDescription: "`standalone` or `replication`.",
-				Optional:            true,
-				Computed:            true,
-				Validators:          []validator.String{stringvalidator.OneOf("standalone", "replication")},
+				MarkdownDescription: "`standalone` or `replication`. Accepted on creation only — " +
+					"the API does not report it back, so it is not Computed and an omitted " +
+					"mode stays unset rather than showing the platform's choice.",
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.OneOf("standalone", "replication")},
 			},
 			"parameters": schema.MapAttribute{
 				MarkdownDescription: "Customer-tunable PostgreSQL server settings, e.g. `work_mem = \"16MB\"`. " +
@@ -193,6 +201,7 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema.Attributes["redis"] = schema.SingleNestedAttribute{
 		MarkdownDescription: "Configuration for `type = \"redis\"` services. Changes force replacement.",
 		Optional:            true,
+		PlanModifiers:       []planmodifier.Object{fillNullChildrenFromState{}},
 		Attributes: map[string]schema.Attribute{
 			"storage_gb": schema.Int64Attribute{MarkdownDescription: "Volume size in GB.", Optional: true, Computed: true},
 			"mode": schema.StringAttribute{
@@ -212,7 +221,13 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema.Attributes["kafka"] = schema.SingleNestedAttribute{
 		MarkdownDescription: "Configuration for `type = \"kafka\"` services. Changes force replacement.",
 		Optional:            true,
-		PlanModifiers:       []planmodifier.Object{objectplanmodifier.RequiresReplace()},
+		PlanModifiers: []planmodifier.Object{
+			// Order matters: fill the platform's values in first, so
+			// RequiresReplace compares like with like and an omitted
+			// broker count is not read as "set it to null".
+			fillNullChildrenFromState{},
+			objectplanmodifier.RequiresReplace(),
+		},
 		Attributes: map[string]schema.Attribute{
 			"storage_gb": schema.Int64Attribute{
 				MarkdownDescription: "Volume size in GB, per broker. Controllers get a fixed 10 GB each.",
@@ -270,6 +285,11 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			},
 		},
 	}
+	// public_ip and vni are assigned by the platform, so without this every plan
+	// re-plans them as unknown and shows a phantom diff on a gateway nobody touched.
+	ipsec := resp.Schema.Attributes["ipsec_gateway"].(schema.SingleNestedAttribute)
+	ipsec.PlanModifiers = []planmodifier.Object{fillNullChildrenFromState{}}
+	resp.Schema.Attributes["ipsec_gateway"] = ipsec
 }
 
 func (r *serviceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -347,6 +367,18 @@ func (r *serviceResource) Create(ctx context.Context, req resource.CreateRequest
 	if err != nil {
 		resp.Diagnostics.AddError("Creating service", err.Error())
 		return
+	}
+
+	// The create endpoint ignores `name` for the managed datastore types and
+	// stamps its own ("Kafka", "Postgres", "Redis"), so a configured name has to
+	// be applied as a follow-up patch or every plan afterwards shows drift.
+	if plan.Name.ValueString() != "" && svc.Name != plan.Name.ValueString() {
+		if _, err := svcs.Update(ctx, svc.Slug, cloud.UpdateServiceInput{
+			Action: "name", Name: plan.Name.ValueString(),
+		}); err != nil {
+			resp.Diagnostics.AddError("Setting service name", err.Error())
+			return
+		}
 	}
 
 	// Create does not accept every field; apply the remainder as updates.
@@ -595,6 +627,15 @@ func (r *serviceResource) applyUpdates(
 	return diags
 }
 
+// deployTimeout bounds the wait for a rollout.
+//
+// A deployment's status is written by a watch on the controller's Service CR,
+// so a type whose workload the controller does not report on — or whose
+// upstream operator is missing from the cluster — leaves the row at its empty
+// default forever. Without a deadline that is not a slow apply, it is an apply
+// that never returns.
+const deployTimeout = 15 * time.Minute
+
 // deploy approves any pending changeset and rolls out, blocking until the
 // deployment reaches a terminal state so that `terraform apply` failing means
 // the rollout actually failed.
@@ -607,8 +648,22 @@ func (r *serviceResource) deploy(ctx context.Context, svcs *cloud.ServicesClient
 		return diags
 	}
 
-	final, err := svcs.WaitForDeployment(ctx, slug, dep.Slug, 5*time.Second)
+	waitCtx, cancel := context.WithTimeout(ctx, deployTimeout)
+	defer cancel()
+
+	final, err := svcs.WaitForDeployment(waitCtx, slug, dep.Slug, 5*time.Second)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			diags.AddError("Timed out waiting for deployment",
+				fmt.Sprintf("Deployment %s for service %s did not reach a terminal status within %s. "+
+					"The service may still be starting, but the platform never reported a status for "+
+					"this rollout — for an operator-backed type (kafka, redis) that usually means the "+
+					"upstream operator is not installed or not healthy in the target cluster. "+
+					"Check the service in the Simplifyd dashboard, and set `deploy = false` on this "+
+					"resource if you want Terraform to stage changes without waiting.",
+					dep.Slug, slug, deployTimeout))
+			return diags
+		}
 		diags.AddError("Waiting for deployment", err.Error())
 		return diags
 	}
@@ -633,7 +688,11 @@ func (r *serviceResource) apply(ctx context.Context, m *serviceModel, s scope, s
 	m.Status = types.StringValue(string(svc.Status))
 	m.PrivateHostname = types.StringValue(svc.PrivateHostname)
 
-	if svc.Docker != nil {
+	// Same trap as the kafka/ipsec blocks below: the API returns a zero-valued
+	// docker_image_svc on every service, so writing this block whenever the
+	// pointer is set gives an http_gateway a `docker = {image = ""}` and
+	// Terraform rejects the apply as an inconsistent result.
+	if svc.Docker != nil && svc.Type == cloud.ServiceTypeDocker {
 		if m.Docker == nil {
 			m.Docker = &dockerModel{StartCommandArgs: types.ListNull(types.StringType)}
 		}
@@ -643,11 +702,16 @@ func (r *serviceResource) apply(ctx context.Context, m *serviceModel, s scope, s
 			m.Docker.StartCommand = types.StringValue(svc.Docker.StartCommand)
 		}
 	}
-	if svc.Redis != nil && m.Redis != nil {
+	if svc.Redis != nil && svc.Type == cloud.ServiceTypeRedis {
+		if m.Redis == nil {
+			m.Redis = &redisModel{}
+		}
 		m.Redis.Mode = types.StringValue(svc.Redis.Mode)
 		m.Redis.Replicas = types.Int64Value(int64(svc.Redis.Replicas))
+		m.Redis.StorageGB = types.Int64Value(int64(svc.Redis.StorageGB))
 	}
-	if svc.Postgres != nil && m.Postgres != nil {
+	if svc.Postgres != nil && svc.Type == cloud.ServiceTypePostgres && m.Postgres != nil {
+		m.Postgres.StorageGB = types.Int64Value(int64(svc.Postgres.StorageGB))
 		// Preserve null vs empty: a config that never set parameters must not
 		// pick up {} as drift the moment the platform reports an empty map.
 		if len(svc.Postgres.Parameters) > 0 || !m.Postgres.Parameters.IsNull() {
@@ -658,14 +722,24 @@ func (r *serviceResource) apply(ctx context.Context, m *serviceModel, s scope, s
 			}
 		}
 	}
-	if svc.Kafka != nil && m.Kafka != nil {
+	// Gate on the service's own type, not on the pointer: the API serializes a
+	// zero-valued block for every type on every service, so a docker service
+	// comes back carrying an empty `kafka_svc` too. Populating from that would
+	// write a kafka block onto a docker service and force replacement.
+	if svc.Kafka != nil && svc.Type == cloud.ServiceTypeKafka {
+		// Populate even when the model has no block yet: on import there is no
+		// prior config, and leaving it null makes the next plan replace a
+		// perfectly healthy cluster.
+		if m.Kafka == nil {
+			m.Kafka = &kafkaModel{}
+		}
 		m.Kafka.StorageGB = types.Int64Value(int64(svc.Kafka.StorageGB))
 		m.Kafka.Mode = types.StringValue(svc.Kafka.Mode)
 		m.Kafka.Brokers = types.Int64Value(int64(svc.Kafka.Brokers))
 		m.Kafka.Controllers = types.Int64Value(int64(svc.Kafka.Controllers))
 		m.Kafka.Version = types.StringValue(svc.Kafka.Version)
 	}
-	if svc.IPsecGateway != nil {
+	if svc.IPsecGateway != nil && svc.Type == cloud.ServiceTypeIPsecGateway {
 		if m.IPsecGateway == nil {
 			m.IPsecGateway = &ipsecGatewayModel{LocalSubnets: types.ListNull(types.StringType)}
 		}

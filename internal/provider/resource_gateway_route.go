@@ -57,7 +57,9 @@ func (r *gatewayRouteResource) Schema(_ context.Context, _ resource.SchemaReques
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, PlanModifiers: replaceStr},
+			"env": schema.StringAttribute{MarkdownDescription: envDoc, Optional: true, Computed: true, PlanModifiers: []planmodifier.String{
+				stringplanmodifier.RequiresReplace(), stringplanmodifier.UseStateForUnknown(),
+			}},
 			"service": schema.StringAttribute{
 				MarkdownDescription: "Slug of the `http_gateway` service this route belongs to.",
 				Required:            true,

@@ -38,6 +38,18 @@ parent scope. Terraform needs one opaque string, so IDs are the full path:
 `<workspace>/<project>/<env>/<service>`. That is also the `terraform import`
 format.
 
+**`deploy = false` leaves the service reading back its pre-deploy values.**
+`vcpus`, `memory` and the other action-based fields are staged into the
+changeset, not written to the service, so plans keep showing the configured
+values as a diff until a deploy applies them. That is the platform's model, not
+drift the provider can resolve.
+
+**A rollout the platform never reports on times out.** Deployment status is
+written by a watch on the controller's Service CR, so a type whose upstream
+operator is absent from the target cluster leaves the status empty forever. The
+wait is capped at 15 minutes and fails with an explanation rather than hanging
+the apply; `deploy = false` stages the change without waiting.
+
 **Deploys are synchronous.** `simplifyd_service` has a `deploy` flag (default
 `true`). When set, create and update approve the pending changeset, roll out,
 and block until the deployment reaches a terminal state — a failed rollout
@@ -69,6 +81,17 @@ both from a secret store, not from literals.
 `simplifyd_ipsec_connection` write configuration that the running pod picks up
 on its next deployment, so a change to either is live only once the gateway
 service is redeployed.
+
+**The create endpoint names the managed datastores itself.** It stamps "Kafka",
+"Postgres" or "Redis" over whatever `name` the request carried, so the provider
+follows a create with a name patch. Without it every plan after the first showed
+the configured name as drift.
+
+**Per-type blocks are gated on the service's type, not on their presence.** The
+API serializes a zero-valued `kafka_svc`, `redis_svc` and so on for every
+service whatever its type, so a docker service reads back carrying an empty
+Kafka block. Trusting the pointer wrote that block into state and forced
+replacement on the next plan.
 
 **Action-based updates.** The API's service PATCH mutates one concern per
 request (`name`, `vcpus`, `image`, …), so a single Terraform update can fan out
