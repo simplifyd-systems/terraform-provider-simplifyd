@@ -8,7 +8,7 @@ require (
 	github.com/hashicorp/terraform-plugin-framework-validators v0.15.0
 	github.com/hashicorp/terraform-plugin-go v0.25.0
 	github.com/hashicorp/terraform-plugin-log v0.9.0
-	github.com/simplifyd-systems/cloud-go-sdk v0.1.20
+	github.com/simplifyd-systems/cloud-go-sdk v0.1.21
 )
 
 require (
@@ -73,4 +73,3 @@ require (
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-replace github.com/simplifyd-systems/cloud-go-sdk => ../sdk/cloud-go-sdk
